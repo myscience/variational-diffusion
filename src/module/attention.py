@@ -78,7 +78,7 @@ class Adapter(nn.Module):
 
     def _get_adapter(
         self,
-        pattern : str,
+        pattern : str | Tuple[str, ...],
         chn_inp : int,
         chn_out : int,
     ) -> nn.Module:
@@ -110,7 +110,7 @@ class AdaptiveAttention(MultiheadAttention):
 
         qry_dim = default(qry_dim, emb_dim)
         key_dim = default(key_dim, qry_dim)
-        val_dim = default(val_dim, qry_dim)
+        val_dim = default(val_dim, key_dim)
         
         # Build the attention adepter
         self.adapter = Adapter(
@@ -133,7 +133,7 @@ class AdaptiveAttention(MultiheadAttention):
         '''
 
         key = default(key, qry)
-        val = default(val, qry)
+        val = default(val, key)
 
         # Adapt the inputs to the expected format by the MHA module
         qry, key, val = self.adapter(qry, key, val)
