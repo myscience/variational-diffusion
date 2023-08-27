@@ -10,6 +10,7 @@ from .utils import default
 from .module.conv import Upscale
 from .module.conv import Downscale
 from .module.conv import ContextRes
+from .module.embedding import TimeEmbedding
 from .module.attention import AdaptiveAttention
 
 class UNet(nn.Module):
