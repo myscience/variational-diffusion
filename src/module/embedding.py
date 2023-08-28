@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from torch import Tensor
 
+from einops import einsum
 from einops import rearrange
 
 class TimeEmbedding(nn.Module):
@@ -77,8 +78,8 @@ class FourierEmbedding(nn.Module):
 
         (bs, chn, *_), device = z.shape, z.device
 
-        freq = torch.outer(2 ** self.n_exp.to(device), z)
-        freq = rearrange(freq, 'n, b c ... -> b (n c) ...')
+        freq = einsum(2 ** self.n_exp.to(device), z, 'n, b c ... -> b n c ...')
+        freq = rearrange(freq, 'b n c ... -> b (n c) ...')
 
         f = freq.sin()
         g = freq.cos()

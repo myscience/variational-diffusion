@@ -58,7 +58,7 @@ class UNet(nn.Module):
         )
 
         # NOTE: We need channels * 2 to accommodate for the self-conditioning
-        tot_chn = inp_chn * (1 + use_cond + self.fourier_emb.n_feat if exists(n_fourier) else 0)
+        tot_chn = inp_chn * (1 + use_cond + (2 * self.fourier_emb.n_feat if exists(n_fourier) else 0))
 
         self.proj_inp = nn.Conv2d(tot_chn, net_dim, 7, padding = 3)
 
