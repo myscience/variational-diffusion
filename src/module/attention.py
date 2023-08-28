@@ -25,6 +25,7 @@ class Adapter(nn.Module):
         # assume self-attention is going to be computed, so
         # we simply replicate the pattern for both key and values
         if isinstance(pattern, str): pattern = [pattern] * 3
+        if len(pattern) == 2: pattern = (*pattern, pattern[-1])
 
         key_dim = default(key_dim, qry_dim)
         val_dim = default(val_dim, qry_dim)
@@ -104,9 +105,10 @@ class AdaptiveAttention(MultiheadAttention):
         qry_dim : int | None = None,
         key_dim : int | None = None,
         val_dim : int | None = None,
+        batch_first : bool = True,
         **kwargs
     ) -> None:
-        super(AdaptiveAttention, self).__init__(emb_dim, n_heads, **kwargs)
+        super(AdaptiveAttention, self).__init__(emb_dim, n_heads, batch_first=batch_first, **kwargs)
 
         qry_dim = default(qry_dim, emb_dim)
         key_dim = default(key_dim, qry_dim)
@@ -126,8 +128,9 @@ class AdaptiveAttention(MultiheadAttention):
         qry : Tensor,
         key : Tensor | None = None,
         val : Tensor | None = None,
+        return_weights : bool = False,
         **kwargs
-    ) -> Tuple[Tensor, Tensor | None]:
+    ) -> Tensor | Tuple[Tensor, Tensor]:
         '''
         
         '''
@@ -144,4 +147,4 @@ class AdaptiveAttention(MultiheadAttention):
         # Restore the correct output format
         attn = self.adapter.restore(attn)
 
-        return attn, attn_weights
+        return (attn, attn_weights) if return_weights else attn
