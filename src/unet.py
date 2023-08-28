@@ -41,6 +41,7 @@ class UNet(nn.Module):
 
         out_dim = default(out_dim, inp_chn)
 
+        self.inp_chn = inp_chn
         self.use_cond = use_cond
         self.use_attn = use_attn
 
