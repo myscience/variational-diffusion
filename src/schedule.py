@@ -15,8 +15,8 @@ class LinearSchedule(nn.Module):
     ) -> None:
         super().__init__()
 
-        self.q = torch.Parameter(torch.tensor(gamma_min))
-        self.m = torch.Parameter(torch.tensor(gamma_max - gamma_min))
+        self.q : Tensor = torch.Parameter(torch.tensor(gamma_min))
+        self.m : Tensor = torch.Parameter(torch.tensor(gamma_max - gamma_min))
 
     def forward(self, t : float) -> Tensor:
         return self.m.abs() * t + self.q

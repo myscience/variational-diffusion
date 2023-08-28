@@ -11,6 +11,7 @@ from .module.conv import Upscale
 from .module.conv import Downscale
 from .module.conv import ContextRes
 from .module.embedding import TimeEmbedding
+from .module.embedding import FourierEmbedding
 from .module.attention import AdaptiveAttention
 
 class UNet(nn.Module):
@@ -24,34 +25,30 @@ class UNet(nn.Module):
         self,
         net_dim : int = 4,
         out_dim : int | None = None,
+        inp_chn : int = 3,
+        dropout : float = 0.,
+        adapter : str | Tuple[str, ...] = 'b c h w -> b (h w) c', 
         attn_dim : int = 128,
-        channels : int = 3,
         ctrl_dim : int | None = None,
         use_cond : bool = False,
         use_attn : bool = False,
         chn_mult : List[int] = (1, 2, 4, 8),
+        n_fourier : Tuple[int, ...] | None = None,
         num_group : int = 8,
         num_heads : int = 4,
-        dropout : float = 0.,
-        adapter : str | Tuple[str, ...] = 'b c h w -> b (h w) c' 
     ) -> None:
         super().__init__()
 
-        out_dim = default(out_dim, channels)
+        out_dim = default(out_dim, inp_chn)
 
-        self.channels = channels
         self.use_cond = use_cond
         self.use_attn = use_attn
 
-        # NOTE: We need channels * 2 to accommodate for the self-conditioning
-        self.proj_inp = nn.Conv2d(self.channels * (1 + use_cond), net_dim, 7, padding = 3)
+        # * Build the input embeddings
+        # Optional Fourier Feature Embeddings
+        self.fourier_emb = FourierEmbedding(*n_fourier) if exists(n_fourier) else nn.Identity()
 
-        dims = [net_dim, *map(lambda m: net_dim * m, chn_mult)]
-        mid_dim = dims[-1]
-
-        dims = list(zip(dims, dims[1:]))
-
-        # * Context embedding
+        # Time Embeddings
         ctx_dim = net_dim * 4
         self.time_emb = nn.Sequential(
             TimeEmbedding(net_dim),
@@ -59,6 +56,16 @@ class UNet(nn.Module):
             nn.GELU(),
             nn.Linear(ctx_dim, ctx_dim)
         )
+
+        # NOTE: We need channels * 2 to accommodate for the self-conditioning
+        tot_chn = inp_chn * (1 + use_cond + self.fourier_emb.n_feat if exists(n_fourier) else 0)
+
+        self.proj_inp = nn.Conv2d(tot_chn, net_dim, 7, padding = 3)
+
+        dims = [net_dim, *map(lambda m: net_dim * m, chn_mult)]
+        mid_dim = dims[-1]
+
+        dims = list(zip(dims, dims[1:]))
 
         # * Building the model. It has three main components:
         # * 1) The downscale modules
@@ -123,8 +130,12 @@ class UNet(nn.Module):
                 - imgs: Processed images, tensor of shape [batch, channel, H, W]
         '''
 
-        # Optional self-conditioning to the model
+        # Optional self-conditioning to the model (we default to original
+        # input size before fourier embeddings are added)
         cond = default(cond, torch.zeros_like(imgs))
+
+        # Add (optional) Fourier Embeddings
+        imgs = self.fourier_emb(imgs)
 
         if self.use_cond: imgs = torch.cat((imgs, cond), dim = 1)
 

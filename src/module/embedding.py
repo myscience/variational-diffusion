@@ -3,6 +3,8 @@ import torch.nn as nn
 
 from torch import Tensor
 
+from einops import rearrange
+
 class TimeEmbedding(nn.Module):
     '''
         Embedding for time-like data used by diffusion models.
@@ -37,3 +39,50 @@ class TimeEmbedding(nn.Module):
         emb_time[..., 1::2] = emb_v.cos()
 
         return emb_time
+    
+class FourierEmbedding(nn.Module):
+    '''
+        Set of Fourier Features to add to the input latent
+        code "z" of the noise-predictor UNet model to ease
+        its handling of the high-frequency components of the
+        input, which have a significant impact on the likelihood
+        (despite not that much for the visual appearance).
+    '''
+
+    def __init__(
+        self,
+        n_min : int = 7,
+        n_max : int = 8,
+        n_step : int = 1,
+    ) -> None:
+        '''
+        
+        '''
+        super().__init__()
+
+        self.n_exp = torch.arange(n_min, n_max, n_step)
+        self.n_feat = len(self.n_exp)
+
+    def forward(self, z : Tensor) -> Tensor:
+        '''
+            Add the Fourier features to the input latent code.
+            The features are concatenated to the channel dimension
+            of the input vector, which is expected to have shape
+            [batch_size, chn_dim, ...].
+
+            The Fourier features are defined as:
+            - f^n_ijk = sin(2^n pi z_ijk)
+            - g^n_ijk = cos(2^n pi z_ijk)
+        '''
+
+        (bs, chn, *_), device = z.shape, z.device
+
+        freq = torch.outer(2 ** self.n_exp.to(device), z)
+        freq = rearrange(freq, 'n, b c ... -> b (n c) ...')
+
+        f = freq.sin()
+        g = freq.cos()
+
+        return torch.cat([z, f, g], dim = 1)
+
+
