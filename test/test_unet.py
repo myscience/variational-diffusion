@@ -5,7 +5,7 @@ from torch import Tensor
 
 from src.unet import UNet
 
-class AdaptiveAttentionTest(unittest.TestCase):
+class UNetTest(unittest.TestCase):
     def setUp(self) -> None:
         
         chn_dim = 3

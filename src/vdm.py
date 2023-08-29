@@ -15,6 +15,7 @@ from einops import reduce
 from einops import rearrange
 
 from .utils import default
+from .utils import enlarge_as
 from .schedule import LinearSchedule
 
 loge2 = torch.log(torch.tensor(2))
@@ -45,7 +46,6 @@ class VariationalDiffusion(nn.Module):
     def device(self):
         return next(self.backbone.parameters()).device
     
-
     @torch.no_grad()
     def forward(
         self,
@@ -60,7 +60,7 @@ class VariationalDiffusion(nn.Module):
         '''
         device = self.device
 
-        z_s = default(seed_noise, torch.randn(num_imgs, *self.img_shape), device=device)
+        z_s = default(seed_noise, torch.randn((num_imgs, *self.img_shape), device=device))
 
         # Sample the reverse time-steps and compute the corresponding
         # noise schedule values (gammas)
@@ -140,7 +140,7 @@ class VariationalDiffusion(nn.Module):
 
         # Sample a set of times for forward diffusion q(z_t | x_0)
         # and convert them to gammas using the noise schedule
-        times = self._get_times(bs)
+        times = self._get_times(bs).requires_grad_(True)
         gamma = self.schedule(times)
 
         # Sample from the forward diffusion process (with known noise as we need it
@@ -178,9 +178,10 @@ class VariationalDiffusion(nn.Module):
 
         # Get the probabilities for each data value, we get
         # prob shape: [batch_size, *img_shape, vocab_size]
-        prob = self._data_prob(z_0)
+        prob = self._data_prob(z_0, gamma_0)
 
         # Grab the probability of the data values
+        idxs = rearrange(idxs, '... -> ... 1')
         prob = torch.gather(prob, dim=-1, index=idxs)
 
         # Compute the reconstruction loss
@@ -229,8 +230,8 @@ class VariationalDiffusion(nn.Module):
         noise = default(noise, torch.randn_like(x_0))
 
         # Compute the alpha_t and sigma_t using the noise schedule
-        alpha_t = sqrt(sigmoid(-gamma_t))
-        sigma_t = sqrt(sigmoid(+gamma_t))
+        alpha_t = enlarge_as(sqrt(sigmoid(-gamma_t)), x_0)
+        sigma_t = enlarge_as(sqrt(sigmoid(+gamma_t)), x_0)
 
         return alpha_t * x_0 + sigma_t * noise
     
