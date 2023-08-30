@@ -40,7 +40,7 @@ num_step = 100
 samples = vdm(num_imgs, num_step)
 ```
 
-We now support the learnable noise schedule (the $\gamma_\eta(t)$ network in the paper) via the `LearnableSchedule` module. This is implemented via a monotonic linear network (which uses the `MonotonicLinear` module) as described in *Constrained Monotonic Neural Networks* [Runje & Shankaranarayana, ICML (2021)](https://arxiv.org/abs/2205.11775) (revised in 2023). Moreover, we added preliminary support for optimizing the noise schedule to reduce the variance of the diffusion loss (as discussed in `Appendix I.2` of the main paper). This is achieved via the `reduce_variance` call, which re-uses the already-computed gradient needed for the VLB to reduce computational overhead. 
+We now support the learnable noise schedule (the $\gamma_\eta(t)$ network in the paper) via the `LearnableSchedule` module. This is implemented via a monotonic linear network (which uses the `MonotonicLinear` module) as described in *Constrained Monotonic Neural Networks* [Runje & Shankaranarayana, ICML (2023)](https://arxiv.org/abs/2205.11775). Moreover, we added preliminary support for optimizing the noise schedule to reduce the variance of the diffusion loss (as discussed in `Appendix I.2` of the main paper). This is achieved via the `reduce_variance` call, which re-uses the already-computed gradient needed for the VLB to reduce computational overhead. 
 
 ```python
 import torch
@@ -78,7 +78,7 @@ loss, stats = vdm.compute_loss(imgs)
 
 # Then we call .backward() to populate the gradients
 # NOTE: We need to retain the graph to access the
-#       gradients, otherwise the are freed
+#       gradients, otherwise they are freed
 loss.backward(retain_graph=True)
 
 # Finally we update the noise-schedule gradients to
