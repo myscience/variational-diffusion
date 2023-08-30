@@ -1,4 +1,5 @@
 import torch
+import warnings
 
 import torch.nn as nn
 from torch import Tensor
@@ -34,8 +35,8 @@ class VariationalDiffusion(nn.Module):
     ) -> None:
         super().__init__()
 
-        self.backbone = backbone
-        self.schedule = default(schedule, LinearSchedule())
+        self.backbone : nn.Module = backbone
+        self.schedule : nn.Module = default(schedule, LinearSchedule())
 
         img_chn = self.backbone.inp_chn
 
@@ -110,7 +111,7 @@ class VariationalDiffusion(nn.Module):
         gamma_0 : Tensor = self.schedule(torch.tensor([0.], device=self.device))
         gamma_1 : Tensor = self.schedule(torch.tensor([1.], device=self.device))
 
-        diffusion_loss = self._diffusion_loss(imgs)
+        diffusion_loss, SNR_t = self._diffusion_loss(imgs)
         latent_loss = self._latent_loss(imgs, gamma_1)
         recon_loss = self._recon_loss(imgs, gamma_0, idxs)
 
@@ -119,6 +120,7 @@ class VariationalDiffusion(nn.Module):
 
         stat = {
             'tot_loss' : loss.item(),
+            'var_args' : (SNR_t, diffusion_loss),
             'gamma_0'  : gamma_0.item(),
             'gamma_1'  : gamma_1.item(),
             'recon_loss'     : bpd * recon_loss.mean(),
@@ -127,6 +129,45 @@ class VariationalDiffusion(nn.Module):
         }
 
         return loss, stat
+    
+    def reduce_variance(
+        self,
+        SNR_t : Tensor,
+        diff_loss : Tensor,
+    ):
+        '''
+            This function computes the gradients of the variance of the
+            M.C. estimate of the diffusion loss (L_∞) w.r.t. the noise
+            schedule so to optimize its overall shape.
+            NOTE 1: Only the star|end-points contribute to the VLB, which
+                    is what we are optimizing when computing the loss, so
+                    we need an additional objective that can explicitly
+                    train the noise schedule shape.
+            NOTE 2: Following Appendix I.2 of the main paper, note that the
+                    gradient w.r.t. the SNR is already computed when doing
+                    back-prop of the VLB.
+        '''
+        # NOTE: This function should be called after backward on the loss
+        #       has already been called. We check that schedule parameters
+        #       have non-zero gradients
+        msg = '''Noise schedule parameters have zero gradient. This is probably due
+                to the function `reduce_variance` been called before `backward` has
+                been called to the VLB loss. Reduce variance need the gradients and
+                is thus now ineffective. Please only call `reduce_variance` after
+                loss.backward() has been called. 
+            '''
+
+        for par in self.schedule.parameters():
+            if torch.all(par.grad == 0): warnings.warn(msg)
+
+            # Grad already contains derivative of L_∞^MC w.r.t SNR
+            par.grad *= autograd.grad(
+                outputs=SNR_t,
+                inputs=par,
+                grad_outputs=2 * diff_loss,
+                create_graph=True,
+                retain_graph=True,
+            )[0]
 
     def _diffusion_loss(self, x_0 : Tensor) -> Tensor:
         '''
@@ -142,6 +183,8 @@ class VariationalDiffusion(nn.Module):
         # and convert them to gammas using the noise schedule
         times = self._get_times(bs).requires_grad_(True)
         gamma = self.schedule(times)
+
+        SNR_t = exp(-gamma)
 
         # Sample from the forward diffusion process (with known noise as we need it
         # to compute the diffusion loss)
@@ -161,10 +204,10 @@ class VariationalDiffusion(nn.Module):
             retain_graph=True,    
         )
 
-        loss = .5 * dgamma_dt * reduce(((eps - eps_theta) ** 2), 'b ... -> b', 'sum')
+        loss = .5 * dgamma_dt * reduce(((eps - eps_theta) ** 2), 'b ... -> b 1', 'sum')
 
         # Return loss with dimension [batch_size]
-        return loss
+        return loss, SNR_t
 
     def _recon_loss(self, x_0 : Tensor, gamma_0 : Tensor, idxs : Tensor) -> Tensor:
         '''
@@ -292,7 +335,6 @@ class VariationalDiffusion(nn.Module):
         # Normalize along the vocab_size dimension
         return log_softmax(logits, dim=-1)
 
-
     def _get_times(self, batch_size : int, sampler : str = 'low-var') -> Tensor:
         '''
             Sample the diffusion time steps. We can choose the sampler to
@@ -304,10 +346,13 @@ class VariationalDiffusion(nn.Module):
         match sampler:
             case 'low-var':
                 t_0 = torch.rand(1).item() / batch_size
-                return torch.arange(t_0, 1., 1 / batch_size, device=self.device)
+                ts = torch.arange(t_0, 1., 1 / batch_size, device=self.device)
+
+                # Add single channel dimension
+                return rearrange(ts, 'b -> b 1')
             
             case 'naive':
-                return torch.rand(batch_size, device=self.device)
+                return torch.rand((batch_size, 1), device=self.device)
             
         raise ValueError(f'Unknown sampler: {sampler}. Available samplers are: {samplers}')
 

@@ -25,8 +25,10 @@ class TimeEmbedding(nn.Module):
         # NOTE: We multiply by 1000 because time in variational models
         #       is formalized in [0, 1], so we just upscale to 1000 for
         #       proper embedding computation
-        time = torch.atleast_1d(time) * 1000
-        bs = len(time)
+        time *= 1000
+
+        # Check for correct time shape
+        bs, _ = time.shape
 
         half_dim = self.emb_dim // 2        
         emb_time = torch.empty((bs, self.emb_dim), device = time.device)
@@ -34,7 +36,7 @@ class TimeEmbedding(nn.Module):
         pos_n = torch.arange(half_dim, device = time.device)
         inv_f = 1. / (self.base ** (pos_n / (half_dim - 1)))
 
-        emb_v = torch.outer(time, inv_f)
+        emb_v = einsum(time, inv_f, 'b _, f -> b f')
 
         emb_time[..., 0::2] = emb_v.sin()
         emb_time[..., 1::2] = emb_v.cos()
