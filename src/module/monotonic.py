@@ -5,7 +5,9 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing import Tuple, Callable
 
+from einops import repeat
 from functools import partial
+
 from ..utils import default
 
 def saturating_func(
@@ -16,12 +18,11 @@ def saturating_func(
     const : float = 1.,
 ) -> Tensor:
     conv = conv_f(+torch.ones_like(x) * const)
-    conc = conc_f(-torch.ones_like(x) * const)
 
     return slope * torch.where(
         x <= 0,
         conv_f(x + const) - conv,
-        conc_f(x - const) + conc,
+        conc_f(x - const) + conv,
     )
 
 class MonotonicLinear(nn.Linear):
@@ -40,7 +41,7 @@ class MonotonicLinear(nn.Linear):
         bias : bool = True,
         gate_func : str = 'elu',
         indicator : int | Tensor | None = None,
-        act_weight : Tuple[float, float, float] = (7, 7, 2),
+        act_weight : str | Tuple[float, float, float] = (7, 7, 2),
     ) -> None:
         # Assume positive monotonicity in all input features
         indicator = default(indicator, torch.ones(in_features))
@@ -49,8 +50,11 @@ class MonotonicLinear(nn.Linear):
             indicator = torch.ones(in_features) * indicator
 
         assert indicator.dim() == 1, 'Indicator tensor must be 1-dimensional.'
-        assert indicator.size  == in_features, 'Indicator tensor must have the same number of elements as the input features.'
+        assert indicator.size(-1) == in_features, 'Indicator tensor must have the same number of elements as the input features.'
         assert len(act_weight) == 3, f'Relative activation weights should have len = 3. Got {len(act_weight)}'
+        if isinstance(act_weight, str): assert act_weight in ('concave', 'convex')
+
+        self.indicator = indicator
 
         # Compute the three activation functions: concave|convex|saturating
         match gate_func:
@@ -68,7 +72,10 @@ class MonotonicLinear(nn.Linear):
             conc_f=self.act_conc,
         )
 
-        self.act_weight = torch.tensor(act_weight) / sum(act_weight)
+        match act_weight:
+            case 'concave': self.act_weight = torch.tensor((1, 0, 0))
+            case 'convex' : self.act_weight = torch.tensor((0, 1, 0))
+            case _: self.act_weight = torch.tensor(act_weight) / sum(act_weight)
 
         # Build the layer weights and bias
         super(MonotonicLinear, self).__init__(in_features, out_features, bias)
@@ -78,7 +85,7 @@ class MonotonicLinear(nn.Linear):
         '''
 
         # Get the absolute values of the weights
-        abs_weights = self.weights.data.abs()
+        abs_weights = self.weight.data.abs()
 
         # * Use monotonicity indicator T to adjust the layer weights
         # * T_i = +1 -> W_ij <=  || W_ij ||
@@ -86,18 +93,22 @@ class MonotonicLinear(nn.Linear):
         # * T_i =  0 -> do nothing
         mask_pos = self.indicator == +1
         mask_neg = self.indicator == -1
-        self.weight.data[mask_pos] = +abs_weights[mask_pos]
-        self.weight.data[mask_neg] = -abs_weights[mask_neg]
+
+        self.weight.data[..., mask_pos] = +abs_weights[..., mask_pos]
+        self.weight.data[..., mask_neg] = -abs_weights[..., mask_neg]
 
         # Get the output of linear layer
         out = super().forward(x)
 
         # Compute output by adding non-linear gating according to
         # relative importance of activations
-        s_conv, s_conc, s_sat = self.act_weight * self.inp_features
-        
+        s_conv, s_conc, _ = (self.act_weight * self.out_features).round()
+        s_conv = int(s_conv)
+        s_conc = int(s_conc)
+        s_sat = self.out_features - s_conv - s_conc
+
         i_conv, i_conc, i_sat = torch.split(
-            x, (s_conv, s_conc, s_sat), dim=-1
+            out, (s_conv, s_conc, s_sat), dim=-1
         )
 
         out = torch.cat((
