@@ -59,3 +59,14 @@ samples = vdm(num_imgs, num_step)
   year={2021}
 }
 ```
+
+```bibtex
+@inproceedings{runje2023constrained,
+  title={Constrained monotonic neural networks},
+  author={Runje, Davor and Shankaranarayana, Sharath M},
+  booktitle={International Conference on Machine Learning},
+  pages={29338--29353},
+  year={2023},
+  organization={PMLR}
+}
+```
