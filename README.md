@@ -61,7 +61,7 @@ vdm = VariationalDiffusion(
     schedule=LearnableSchedule(
       hid_dim=[50, 50],
       gate_func='relu',
-    ), # Linear schedule with learnable endpoints
+    ), # Fully learnable schedule with support for reduced variance
     img_shape=(32, 32),
     vocab_size=256,
 )
@@ -93,11 +93,17 @@ optim.step()
 def loss, stats
 ```
 
-# Roadmap
+We now support training the model via [PyTorch Lightning](https://pytorch-lightning.readthedocs.io/en/latest/). This is implemented in `src/vdm.py` and can be used from the command line by providing a configuration file (see example in `config/vdm_cifar10.yaml`):
+
+```bash
+python train.py -conf vdm_cifar10.yaml # all the pytorch-trainer arguments are supported
+```
+
+## Roadmap
 
 - [x] Put all the essential pieces together: UNet, VDM, a noise schedule.
 - [x] Add fully learnable schedule (monotonic neural network). Implement gradient trick described in Appendix I.2
-- [ ] Add functioning training script (Lightning).
+- [x] Add functioning training script (Lightning).
 - [ ] Show some results.
 
 ## Citations

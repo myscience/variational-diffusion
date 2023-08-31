@@ -1,0 +1,61 @@
+UNET:
+  net_dim : 32
+  out_dim : null
+  inp_chn : 3
+  dropout : 0.1
+  adapter : 'q c h w -> q (h w) c'
+  attn_dim : 128
+  ctrl_dim : null
+  use_cond : False
+  use_attn : True
+  chn_mult : [2, 1, 1, 1]
+  n_fourier : [7, 8, 1] # n_min=7, n_max=8, step=1
+  num_group : 8
+  num_heads : 8
+
+VDM:
+  data_key : 'imgs'
+  vocab_size : 256
+  sampling_ste: 50
+  img_shape: [32, 32]
+
+SCHEDULE:
+  name : 'learnable'
+  gamma_min : -13.3
+  gamma_max : 5.0
+  hid_dim : [100]
+  gate_func : 'relu'
+  act_weight : [7, 7, 2]
+
+OPTIMIZER:
+  name          : AdamW
+  learning_rate : 0.0001
+  weight_decay  : 0.05
+
+DATASET:
+  root : '<ROOT/WHERE/CIFAR10/DATA/IS/LOCATED>'
+  download: True
+  num_workers : 4
+  batch_size : 128
+  val_batch_size : 128
+  train_shuffle : True
+  val_shuffle : True
+
+TRAINER:
+  max_epochs : 1000
+  accelerator : gpu
+  devices : 4
+  # strategy : ddp_find_unused_parameters_false
+  # accumulate_grad_batches : 2
+  val_check_interval: 1
+  # limit_val_batches : 1
+  log_every_n_steps : 1
+
+MISC:
+  logs_dir : '<YOUR/LOG/PATH>'
+  ckpt_dir : '<WHERE/TO/STORE/THE/MODEL/CKPT>'
+  run_name : 'VDM-cifar10'
+  monitor  : 'val_loss'
+  version  : null
+  save_last : True
+  resume_ckpt : null

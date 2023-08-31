@@ -1,37 +1,75 @@
+from lightning.pytorch.utilities.types import STEP_OUTPUT
 import torch
 import warnings
 
 import torch.nn as nn
+import torch.optim as optim
+
 from torch import Tensor
 from torch import autograd
 from torch import sqrt, sigmoid, prod
 from torch import exp, expm1, log
 from torch import log_softmax
-from typing import Tuple
+from typing import Any, Tuple, Dict, List
 from itertools import pairwise
+
+from torchvision.utils import make_grid
+
+from lightning import LightningModule
 
 from tqdm.auto import tqdm
 
 from einops import reduce
 from einops import rearrange
 
+from .utils import exists
 from .utils import default
 from .utils import enlarge_as
+
+from .unet import UNet
 from .schedule import LinearSchedule
+from .schedule import LearnableSchedule
 
 loge2 = torch.log(torch.tensor(2))
 
-class VariationalDiffusion(nn.Module):
+class VariationalDiffusion(LightningModule):
     '''
     
     '''
+
+    @classmethod
+    def from_conf(cls, conf_file : Dict[str, Any]) -> 'VariationalDiffusion':
+
+        vdm_conf  = conf_file['VDM']
+        unet_conf = conf_file['UNET']
+        optim_conf= conf_file['OPTIMIZER']
+        schedule_conf = conf_file['SCHEDULE']
+
+        schedule_name = schedule_conf.pop('name')
+
+        match schedule_name:
+            case 'linear': Schedule = LinearSchedule
+            case 'learnable': Schedule = LearnableSchedule
+            case _: raise ValueError(f'Unknown schedule: {schedule_name}')
+
+        # Build the VDM model
+        return cls(
+            backbone=UNet(**unet_conf),
+            schedule=Schedule(**schedule_conf),
+            optim_conf=optim_conf,
+            **vdm_conf,
+        )
 
     def __init__(
         self,
         backbone : nn.Module,
         schedule : nn.Module | None = None,  
         img_shape : Tuple[int, int] = (64, 64),
-        vocab_size : int = 256,              
+        vocab_size : int = 256,         
+        data_key : str = 'imgs',
+        ctrl_key : str | None = None,  
+        sampling_step : int = 50,   
+        optimizer_conf : Dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
 
@@ -43,9 +81,82 @@ class VariationalDiffusion(nn.Module):
         self.img_shape = (img_chn, *img_shape)
         self.vocab_size = vocab_size
 
+        self.data_key = data_key
+        self.ctrl_key = ctrl_key
+        self.opt_conf : Dict[str, Any] = default(optimizer_conf, {'lr' : 1e-3})
+
+        self.num_step = sampling_step
+
     @property
     def device(self):
         return next(self.backbone.parameters()).device
+    
+    def training_step(self, batch : Dict[str, Tensor], batch_idx : int) -> Tensor:
+        # Extract the starting images from data batch
+        x_0  = batch[self.data_key]
+        ctrl = batch[self.ctrl_key] if exists(self.ctrl_key) else None
+
+        # Compute the VLB loss
+        loss, stat = self.compute_loss(x_0)
+        
+        self.log_dict({'train_loss' : loss}, logger = True, on_step = True, sync_dist = True)
+        self.log_dict({f'train_{k}' : v for k, v in stat.item()}, logger = True, on_step = True, sync_dist = True)
+
+        return loss
+    
+    def validation_step(self, batch : Dict[str, Tensor], batch_idx : int) -> Tensor:
+        # Extract the starting images from data batch
+        x_0  = batch[self.data_key]
+        ctrl = batch[self.ctrl_key] if exists(self.ctrl_key) else None
+
+        # Compute the VLB loss
+        loss, stat = self.compute_loss(x_0)
+        
+        self.log_dict({'val_loss' : loss}, logger=True, on_step=True, sync_dist=True)
+        self.log_dict({f'val_{k}' : v for k, v in stat.item()}, logger=True, on_step=True, sync_dist=True)
+
+        return x_0, ctrl
+    
+    @torch.no_grad()
+    def validation_epoch_end(self, val_outs : List[Tuple[Tensor, Tensor | None]]) -> None:
+        '''
+            At the end of the validation cycle, we inspect how the training
+            procedure is doing by sampling novel images from the learn distribution.
+        '''
+
+        # Collect the input shapes
+        (x_0, ctrl), *_ = val_outs
+
+        # Produce 8 samples and log them
+        imgs = self(
+                num_imgs=8,
+                num_step=self.num_step,
+                # ctrl = ctrl,
+                verbose = False,
+            )
+        
+        assert not torch.isnan(imgs).any(), 'NaNs detected in imgs!'
+
+        imgs = make_grid(imgs, nrow = 4)
+
+        # Log images using the default TensorBoard logger
+        self.logger.experiment.add_image('VDM', imgs, global_step=self.global_step)
+    
+    def configure_optimizers(self):
+        opt_name = self.opt_conf.pop('name')
+        match opt_name:
+            case 'AdamW': Optim = optim.AdamW
+            case 'SGD'  : Optim = optim.SGD
+            case _: raise ValueError(f'Unknown optimizer: {opt_name}')
+
+        params = list(self.backbone.parameters()) +\
+                 list(self.schedule.parameters())
+        
+        opt_kw = self.opt_conf
+
+        opt = Optim(params, **opt_kw)
+
+        return opt
     
     @torch.no_grad()
     def forward(
@@ -53,6 +164,7 @@ class VariationalDiffusion(nn.Module):
         num_imgs : int,
         num_steps : int,
         seed_noise : Tensor | None = None,
+        verbose : bool = False,
     ) -> Tensor:
         '''
             We reserve the forward call of the model to the posterior sampling,
@@ -68,7 +180,9 @@ class VariationalDiffusion(nn.Module):
         time = torch.linspace(1., 0., num_steps + 1, device=device)
         gamma = self.schedule(time)
 
-        for gamma_t, gamma_s in tqdm(pairwise(gamma), total=num_steps):
+        iterator = pairwise(gamma)
+        iterator = tqdm(iterator, total=num_steps) if verbose else iterator
+        for gamma_t, gamma_s in iterator:
             # Sample from the backward diffusion process
             z_s = self._coalesce(z_s, gamma_t, gamma_s)
 
